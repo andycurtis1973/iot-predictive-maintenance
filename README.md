@@ -148,16 +148,18 @@ PYTHONPATH=src deploy/demo.py capture-local 16 300
 
 ## Video
 
-`video/` renders a ~90-second explainer: `build_assets.py` draws the slides and
-writes `assets/script.json`; `make_audio_local.py` narrates it with macOS `say`
-(the offline stand-in for the production F5-TTS GPU worker in `launch.py`);
-`assemble_local.py` muxes slides + narration into `video/out/fleet_health_demo.mp4`
-(timing derived from each segment's audio length).
+`video/` renders a ~2-minute explainer. `build_assets.py` draws the slides and
+writes `assets/script.json`; narration is synthesized in a cloned **expert voice**
+by F5-TTS on a GPU worker (`launch.py` → `make_audio_worker.py`); `assemble_local.py`
+muxes slides + narration into `video/out/fleet_health_demo.mp4` (timing derived
+from each segment's audio length). `make_audio_local.py` is a no-infra fallback
+that narrates with macOS `say` when the GPU worker isn't available (it does **not**
+use the expert voice).
 
 ```bash
-python3 video/build_assets.py
-python3 video/make_audio_local.py
-python3 video/assemble_local.py
+python3 video/build_assets.py        # slides + script.json
+python3 video/launch.py run          # F5-TTS narration on the GPU worker (expert voice)
+python3 video/assemble_local.py      # -> video/out/fleet_health_demo.mp4
 ```
 
 ## Key design decisions
