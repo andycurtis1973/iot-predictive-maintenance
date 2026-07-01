@@ -24,9 +24,13 @@ from .state_store import (
 from .cost_model import CostInputs, CostModel, cost_model
 from .historian import (
     Historian,
+    InfluxHistorian,
     InMemoryHistorian,
     TimestreamHistorian,
     create_database_and_table,
+    create_influxdb_instance,
+    influx_auth_from_secret,
+    wait_influxdb_available,
 )
 from .serving import MonitorService, ServeResult, Service, make_http_server, make_lambda_handler
 
@@ -68,7 +72,11 @@ __all__ = [
     "Historian",
     "InMemoryHistorian",
     "TimestreamHistorian",
+    "InfluxHistorian",
     "create_database_and_table",
+    "create_influxdb_instance",
+    "influx_auth_from_secret",
+    "wait_influxdb_available",
     "MonitorService",
     "ServeResult",
     "Service",

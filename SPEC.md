@@ -157,11 +157,17 @@ telemetry ─▶ │ load asset state (DynamoDB) → features → health → RUL
   `asset_id`. Single-digit-ms point read/update on every reading; the pipeline is
   stateless between invocations (any worker serves any asset). KMS-encrypted, TTL,
   on-demand (idle-free).
-- **Timestream (historian).** Every raw reading is written best-effort as a
-  multi-measure record for dashboards, ad-hoc RUL backtests, and long-range trend
-  queries. Memory tier for recent data, magnetic tier for cheap long retention.
-  A historian hiccup must **never** drop a live reading or suppress an alert — the
-  DynamoDB hot path owns correctness.
+- **Timestream (historian).** Every raw reading is written best-effort for
+  dashboards, ad-hoc RUL backtests, and long-range trend queries. A historian
+  hiccup must **never** drop a live reading or suppress an alert — the DynamoDB
+  hot path owns correctness. Two backends implement the same `Historian` interface:
+  - **Timestream for InfluxDB** (`InfluxHistorian`) — a provisioned managed
+    InfluxDB instance; line-protocol writes + Flux queries over the InfluxDB 2.x
+    HTTP API (token auth). Open to new AWS accounts, so this is the historian the
+    live end-to-end (`scripts/run_influxdb.py`) actually provisions and runs.
+  - **Timestream for LiveAnalytics** (`TimestreamHistorian`) — serverless
+    multi-measure records; lower-touch but **closed to new customers**, so the
+    serving path degrades to DynamoDB-only when it isn't accessible.
 
 **Compute:** stateless Lambda (or a container on Fargate/EC2 for steady high
 volume). **Inference:** Bedrock `Converse` on the alert path only. **Metrics:**

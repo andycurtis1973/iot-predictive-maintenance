@@ -166,3 +166,226 @@ def create_database_and_table(
             "MagneticStoreRetentionPeriodInDays": magnetic_days,
         },
     ))
+
+
+# ===========================================================================
+# Amazon Timestream for InfluxDB (a managed InfluxDB *database* instance).
+#
+# Timestream for LiveAnalytics (above) is serverless but closed to new
+# customers; Timestream for InfluxDB is a provisioned managed InfluxDB instance
+# that new accounts CAN use. It speaks the InfluxDB 2.x HTTP API (line-protocol
+# writes, Flux queries) with token auth, so this historian talks to it directly
+# over HTTPS — no extra SDK, just urllib. Same Historian Protocol as the others.
+# ===========================================================================
+def _line_protocol(reading: Reading, now_ms: int) -> str:
+    """InfluxDB line protocol for one reading (ms precision)."""
+    return (
+        "telemetry,"
+        f"asset_id={reading.asset_id},asset_type={reading.asset_type} "
+        f"vibration_rms={reading.vibration_rms},"
+        f"temperature_c={reading.temperature_c},"
+        f"current_a={reading.current_a},"
+        f"rpm={reading.rpm},"
+        f"tick={reading.tick}i "
+        f"{int(now_ms)}"
+    )
+
+
+def _parse_flux_csv(text: str) -> list[dict]:
+    """Flatten InfluxDB annotated-CSV query output into a list of row dicts.
+
+    Skips annotation (#) lines and the result/table bookkeeping columns; numeric
+    strings are coerced to float, ``tick`` to int.
+    """
+    import csv
+    import io
+
+    rows: list[dict] = []
+    lines = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
+    if not lines:
+        return rows
+    reader = csv.reader(io.StringIO("\n".join(lines)))
+    header = next(reader, None)
+    if not header:
+        return rows
+    skip = {"", "result", "table", "_start", "_stop", "_measurement"}
+    for raw in reader:
+        rec: dict[str, Any] = {}
+        for name, val in zip(header, raw):
+            if name in skip:
+                continue
+            if name == "tick":
+                rec[name] = int(float(val)) if val else None
+            elif name in _CHANNELS:
+                rec[name] = float(val) if val else None
+            else:
+                rec[name] = val
+        if rec:
+            rows.append(rec)
+    return rows
+
+
+class InfluxHistorian:
+    """Telemetry historian on a Timestream for InfluxDB instance (InfluxDB 2.x API).
+
+    Authenticates either with an API ``token`` (Token header) or, when only
+    admin credentials are available, with ``username``/``password`` via
+    ``/api/v2/signin`` (session cookie, re-issued on expiry). Timestream for
+    InfluxDB stores admin username/password in Secrets Manager but not a token,
+    so the credential path is the one used live.
+    """
+
+    def __init__(
+        self,
+        endpoint: str,
+        token: Optional[str] = None,
+        organization: str = "",
+        bucket: str = "",
+        *,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        port: int = 8086,
+        verify_tls: bool = True,
+        timeout: float = 15.0,
+    ) -> None:
+        self.base = f"https://{endpoint}:{port}"
+        self.token = token
+        self.username = username
+        self.password = password
+        self.org = organization
+        self.bucket = bucket
+        self.timeout = timeout
+        self._cookie: Optional[str] = None
+        if not token and not (username and password):
+            raise ValueError("InfluxHistorian needs a token or username+password")
+        import ssl
+
+        self._ctx = ssl.create_default_context()
+        if not verify_tls:
+            self._ctx.check_hostname = False
+            self._ctx.verify_mode = ssl.CERT_NONE
+        if not token:
+            self._signin()
+
+    def _signin(self) -> None:
+        import base64
+        import urllib.request
+
+        cred = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
+        req = urllib.request.Request(
+            self.base + "/api/v2/signin", data=b"", method="POST",
+            headers={"Authorization": "Basic " + cred},
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as r:
+            cookies = r.headers.get_all("Set-Cookie") or []
+        # keep just the name=value of the session cookie
+        self._cookie = "; ".join(c.split(";", 1)[0] for c in cookies) or None
+
+    def _auth_headers(self) -> dict:
+        if self.token:
+            return {"Authorization": f"Token {self.token}"}
+        return {"Cookie": self._cookie or ""}
+
+    def _request(self, path: str, data: bytes, extra_headers: dict) -> str:
+        import urllib.error
+        import urllib.request
+
+        def _do() -> str:
+            headers = dict(self._auth_headers())
+            headers.update(extra_headers)
+            req = urllib.request.Request(self.base + path, data=data, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as r:
+                return r.read().decode("utf-8", "replace")
+
+        try:
+            return _do()
+        except urllib.error.HTTPError as e:
+            # session expired -> sign in again once (credential mode only)
+            if e.code == 401 and not self.token and self.username:
+                self._signin()
+                return _do()
+            raise
+
+    def write(self, reading: Reading, *, now_ms: int) -> None:
+        from urllib.parse import quote
+
+        path = f"/api/v2/write?org={quote(self.org)}&bucket={quote(self.bucket)}&precision=ms"
+        self._request(path, _line_protocol(reading, now_ms).encode(),
+                      {"Content-Type": "text/plain; charset=utf-8"})
+
+    def recent(self, asset_id: str, limit: int = 50) -> list[dict]:
+        if '"' in asset_id:
+            raise ValueError("asset_id must not contain quotes")
+        from urllib.parse import quote
+
+        flux = (
+            f'from(bucket:"{self.bucket}") |> range(start:-30d) '
+            f'|> filter(fn:(r) => r._measurement == "telemetry" and r.asset_id == "{asset_id}") '
+            f'|> pivot(rowKey:["_time"], columnKey:["_field"], valueColumn:"_value") '
+            f'|> sort(columns:["_time"], desc:true) |> limit(n:{int(limit)})'
+        )
+        csv_text = self._request(
+            f"/api/v2/query?org={quote(self.org)}", flux.encode(),
+            {"Content-Type": "application/vnd.flux", "Accept": "application/csv"},
+        )
+        return _parse_flux_csv(csv_text)
+
+
+# --- Provisioning (boto3 ``timestream-influxdb``) --------------------------
+def create_influxdb_instance(
+    client: Any,
+    name: str,
+    *,
+    username: str,
+    password: str,
+    organization: str,
+    bucket: str,
+    subnet_ids: list,
+    security_group_ids: list,
+    instance_type: str = "db.influx.medium",
+    allocated_storage: int = 20,
+    storage_type: str = "InfluxIOIncludedT1",
+    publicly_accessible: bool = True,
+) -> str:
+    """Create a Timestream for InfluxDB instance; returns its id. ~15-20 min to
+    become AVAILABLE (poll with wait_influxdb_available)."""
+    resp = client.create_db_instance(
+        name=name,
+        username=username,
+        password=password,
+        organization=organization,
+        bucket=bucket,
+        dbInstanceType=instance_type,
+        allocatedStorage=allocated_storage,
+        dbStorageType=storage_type,
+        vpcSubnetIds=subnet_ids,
+        vpcSecurityGroupIds=security_group_ids,
+        publiclyAccessible=publicly_accessible,
+    )
+    return resp["id"]
+
+
+def wait_influxdb_available(client, instance_id: str, *, timeout_s: int = 1800, poll_s: int = 30):
+    """Poll get_db_instance until AVAILABLE (or DELETED/FAILED). Returns the
+    instance description (includes 'endpoint' and 'influxAuthParametersSecretArn')."""
+    import time
+
+    deadline = time.perf_counter() + timeout_s
+    while time.perf_counter() < deadline:
+        d = client.get_db_instance(identifier=instance_id)
+        status = d.get("status")
+        if status == "AVAILABLE":
+            return d
+        if status in ("FAILED", "DELETING", "DELETED"):
+            raise RuntimeError(f"InfluxDB instance {instance_id} entered status {status}")
+        time.sleep(poll_s)
+    raise TimeoutError(f"InfluxDB instance {instance_id} not AVAILABLE within {timeout_s}s")
+
+
+def influx_auth_from_secret(secrets_client, secret_arn: str) -> dict:
+    """Read the InfluxDB admin auth (token/org/bucket/username/password) that
+    Timestream for InfluxDB stores in Secrets Manager on instance creation."""
+    import json
+
+    raw = secrets_client.get_secret_value(SecretId=secret_arn)["SecretString"]
+    return json.loads(raw)

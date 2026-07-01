@@ -72,15 +72,22 @@ reading ─▶ window ─▶ features ─▶ health index ─▶ RUL (trend) ─
 ## Architecture on AWS
 
 ```
-telemetry ─▶ Lambda (stateless) ──┬─▶ DynamoDB    (hot per-asset state)
-                                  ├─▶ Timestream  (raw telemetry history, best-effort)
-                                  └─▶ Bedrock     (work order, on alert only)
+telemetry ─▶ Lambda (stateless) ──┬─▶ DynamoDB              (hot per-asset state)
+                                  ├─▶ Timestream/InfluxDB   (raw telemetry history, best-effort)
+                                  └─▶ Bedrock               (work order, on alert only)
 ```
 
 DynamoDB answers *"what is this asset's state right now?"* at KV latency on every
-reading; Timestream answers *"show me this asset's last month of vibration"* for
-analytics. Using Timestream for the hot path would be slower (it's analytical, not
-a low-latency point store), so the design splits the two jobs — see `SPEC.md` §6.
+reading; the time-series historian answers *"show me this asset's last month of
+vibration"* for analytics. Using a time-series store for the hot path would be
+slower (analytical, not a low-latency point store), so the design splits the two
+jobs — see `SPEC.md` §6.
+
+The historian has two interchangeable backends: **Timestream for InfluxDB**
+(`InfluxHistorian`, a managed InfluxDB instance — open to new AWS accounts, and
+what `scripts/run_influxdb.py` provisions and runs live) and **Timestream for
+LiveAnalytics** (`TimestreamHistorian`, serverless but closed to new customers;
+the serving path degrades to DynamoDB-only when it's unavailable).
 
 ## Layout
 
@@ -105,6 +112,7 @@ scripts/
   run_cost.py     §10 downtime-avoided projection (no spend)
   run_bench.py    hot-path latency bench; dry by default, --live for work orders
   run_e2e.py      LIVE on real DynamoDB (+ --timestream, --live-bedrock); self-tears-down
+  run_influxdb.py LIVE: provision Timestream for InfluxDB, stream a fleet, query it back, tear down
   run_server.py   run the monitor as a local HTTP service
 tests/            AWS-free deterministic suite (66 tests)
 deploy/           demo.py (up/call/drive/capture/down) + Lambda handler + web demo

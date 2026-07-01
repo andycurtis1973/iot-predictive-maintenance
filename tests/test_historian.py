@@ -2,7 +2,12 @@
 
 from types import SimpleNamespace
 
-from fleet_health.historian import InMemoryHistorian, _parse_rows
+from fleet_health.historian import (
+    InMemoryHistorian,
+    _line_protocol,
+    _parse_flux_csv,
+    _parse_rows,
+)
 from fleet_health.model import Reading
 from fleet_health.serving import MonitorService
 from fleet_health.state_store import InMemoryStateStore
@@ -55,3 +60,33 @@ def test_parse_rows_flattens_timestream_response():
     rows = _parse_rows(resp)
     assert rows[0] == {"tick": 12, "vibration_rms": 3.5, "time": "2026-07-01 00:00:00"}
     assert rows[1]["tick"] == 11 and rows[1]["vibration_rms"] == 3.2
+
+
+# --- Timestream for InfluxDB (managed InfluxDB instance) --------------------
+def test_influx_line_protocol():
+    lp = _line_protocol(Reading("MOTOR-1", 5, 2.1, 60.0, 68.0, 3550.0, "motor"), now_ms=1719800000000)
+    assert lp == (
+        "telemetry,asset_id=MOTOR-1,asset_type=motor "
+        "vibration_rms=2.1,temperature_c=60.0,current_a=68.0,rpm=3550.0,tick=5i "
+        "1719800000000"
+    )
+
+
+def test_parse_flux_csv_pivoted():
+    csv_text = (
+        "#datatype,string,long,dateTime:RFC3339,string,string,double,double,double,double,long\r\n"
+        ",result,table,_time,asset_id,asset_type,current_a,rpm,temperature_c,vibration_rms,tick\r\n"
+        ",_result,0,2026-07-01T00:00:00Z,MOTOR-1,motor,68.0,3550.0,60.0,2.1,5\r\n"
+        ",_result,0,2026-06-30T23:59:00Z,MOTOR-1,motor,68.0,3550.0,60.0,2.0,4\r\n"
+    )
+    rows = _parse_flux_csv(csv_text)
+    assert len(rows) == 2
+    assert rows[0]["asset_id"] == "MOTOR-1"
+    assert rows[0]["vibration_rms"] == 2.1
+    assert rows[0]["tick"] == 5
+    assert "table" not in rows[0] and "result" not in rows[0]
+
+
+def test_parse_flux_csv_empty():
+    assert _parse_flux_csv("") == []
+    assert _parse_flux_csv("#datatype,string\n") == []
