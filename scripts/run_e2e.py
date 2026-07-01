@@ -62,13 +62,20 @@ def main() -> int:
     historian = None
     if args.timestream:
         from fleet_health.historian import TimestreamHistorian, create_database_and_table
-        tsw = boto3.client("timestream-write", region_name=REGION, config=cfg)
         print(f"provisioning Timestream {TS_DB}.{TS_TABLE} (telemetry historian)...")
-        create_database_and_table(tsw, TS_DB, TS_TABLE)
-        historian = TimestreamHistorian(
-            tsw, boto3.client("timestream-query", region_name=REGION, config=cfg), TS_DB, TS_TABLE
-        )
-        print("  active.")
+        try:
+            tsw = boto3.client("timestream-write", region_name=REGION, config=cfg)
+            create_database_and_table(tsw, TS_DB, TS_TABLE)
+            historian = TimestreamHistorian(
+                tsw, boto3.client("timestream-query", region_name=REGION, config=cfg), TS_DB, TS_TABLE
+            )
+            print("  active.")
+        except Exception as e:
+            # Timestream LiveAnalytics is closed to new customers; degrade to
+            # DynamoDB-only rather than orphan the run.
+            code = getattr(e, "response", {}).get("Error", {}).get("Code", type(e).__name__)
+            print(f"  skipped ({code}); running DynamoDB-only.")
+            args.timestream = False
 
     service = MonitorService(
         DynamoStateStore(table), work_order_gen=work_order_gen, budget=budget, historian=historian
