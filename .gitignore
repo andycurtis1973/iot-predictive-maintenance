@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+build/
+dist/
+.venv/
+venv/
+
+# Video render intermediates (regenerate with the video pipeline).
+# The final MP4 (video/out/) and the demo.html ARE shipped as deliverables.
+video/audio/
+video/assets/*.png
+*.wav
+*.aiff
+
+# OS / editors / scratch
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,22 @@
+[project]
+name = "fleet-health"
+version = "0.1.0"
+description = "IoT Predictive Maintenance — telemetry → health index → remaining-useful-life → early-warning alerts, on AWS"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+# aws extras (boto3) are only needed for the live scripts + deploy; the library
+# and the whole test suite are pure Python and never touch AWS.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
