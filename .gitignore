@@ -9,10 +9,8 @@ dist/
 .venv/
 venv/
 
-# Video render intermediates (regenerate with the video pipeline).
-# The final MP4 (video/out/) and the demo.html ARE shipped as deliverables.
-video/audio/
-video/assets/*.png
+# Video-generation pipeline — private (kept local only, never published).
+video/
 *.wav
 *.aiff
 

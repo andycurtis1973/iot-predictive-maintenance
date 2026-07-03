@@ -116,7 +116,6 @@ scripts/
   run_server.py   run the monitor as a local HTTP service
 tests/            AWS-free deterministic suite (66 tests)
 deploy/           demo.py (up/call/drive/capture/down) + Lambda handler + web demo
-video/            explainer pipeline: script → slides → narration → MP4
 ```
 
 ## Demo: spin up → run → turn off (real AWS)
@@ -152,22 +151,6 @@ open deploy/web/demo.html
 
 # no AWS? generate the same visual in-process:
 PYTHONPATH=src deploy/demo.py capture-local 16 300
-```
-
-## Video
-
-`video/` renders a ~2-minute explainer. `build_assets.py` draws the slides and
-writes `assets/script.json`; narration is synthesized in a cloned **expert voice**
-by F5-TTS on a GPU worker (`launch.py` → `make_audio_worker.py`); `assemble_local.py`
-muxes slides + narration into `video/out/fleet_health_demo.mp4` (timing derived
-from each segment's audio length). `make_audio_local.py` is a no-infra fallback
-that narrates with macOS `say` when the GPU worker isn't available (it does **not**
-use the expert voice).
-
-```bash
-python3 video/build_assets.py        # slides + script.json
-python3 video/launch.py run          # F5-TTS narration on the GPU worker (expert voice)
-python3 video/assemble_local.py      # -> video/out/fleet_health_demo.mp4
 ```
 
 ## Key design decisions
