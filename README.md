@@ -14,6 +14,9 @@ See `SPEC.md` for the full design.
 This is a genuine anomaly-detection / RUL pipeline, **not** an LLM cache. Bedrock
 appears only on the *alert* path, to draft a work order from a fired alert.
 
+📹 **Explainer video:** [`media/fleet_health_demo.mp4`](media/fleet_health_demo.mp4)
+— a ~2-minute walkthrough of the problem, the approach, and a live run on AWS.
+
 ## Quick start (no AWS needed)
 
 The library and tests are pure Python — the offline parts never call AWS.
